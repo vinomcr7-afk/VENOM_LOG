@@ -1,9 +1,20 @@
 
 const {
-  Client, GatewayIntentBits, Partials, REST, Routes,
-  SlashCommandBuilder, ChannelType, ChannelSelectMenuBuilder,
-  EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder,
-  ButtonBuilder, ButtonStyle, PermissionFlagsBits, AuditLogEvent
+  Client,
+  GatewayIntentBits,
+  Partials,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  ChannelType,
+  ChannelSelectMenuBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  PermissionFlagsBits,
+  AuditLogEvent
 } = require('discord.js');
 
 const fs = require('node:fs');
@@ -47,6 +58,35 @@ const EVENTS = {
   stageUpdate: 'Stage Update',
   webhookUpdate: 'Webhook Update',
   serverUpdate: 'Server Update'
+};
+
+// CUSTOM EMOJI FOR EVERY LOG CATEGORY
+const EVENT_EMOJIS = {
+  memberJoin: '🟢',
+  memberLeave: '🔴',
+  memberKick: '👢',
+  ban: '🔨',
+  unban: '🔓',
+  timeout: '⏳',
+  timeoutRemoved: '✅',
+  nicknameUpdate: '✏️',
+  messageDelete: '🗑️',
+  messageEdit: '📝',
+  channelCreate: '📁',
+  channelDelete: '🗑️',
+  channelUpdate: '⚙️',
+  channelPerms: '🔐',
+  roleCreate: '🆕',
+  roleDelete: '❌',
+  roleUpdate: '⚙️',
+  voiceJoin: '🔊',
+  voiceLeave: '🔇',
+  voiceMove: '🔁',
+  stageCreate: '🎤',
+  stageDelete: '🎤',
+  stageUpdate: '🎙️',
+  webhookUpdate: '🔗',
+  serverUpdate: '🌐'
 };
 
 function loadConfig() {
@@ -100,9 +140,12 @@ const commands = [
       option.setName('event')
         .setDescription('Choose an event')
         .setRequired(true)
-        .addChoices(...Object.entries(EVENTS).map(([value, name]) => ({
-          name, value
-        })))
+        .addChoices(
+          ...Object.entries(EVENTS).map(([value, name]) => ({
+            name: `${EVENT_EMOJIS[value]} ${name}`,
+            value
+          }))
+        )
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(command => command.toJSON());
@@ -125,7 +168,7 @@ async function registerCommands() {
   console.log('Commands registered.');
 }
 
-// LOG EMBEDS WITH IMAGES
+// SEND LOG
 async function sendLog(guild, event, title, description, options = {}) {
   const channelId = config[guild.id]?.[event];
   if (!channelId) return false;
@@ -144,12 +187,8 @@ async function sendLog(guild, event, title, description, options = {}) {
     });
 
   if (options.avatar) embed.setThumbnail(options.avatar);
-
   if (options.image) embed.setImage(options.image);
-
-  if (options.guildImage) {
-    embed.setThumbnail(options.guildImage);
-  }
+  if (options.guildImage) embed.setThumbnail(options.guildImage);
 
   try {
     await channel.send({ embeds: [embed] });
@@ -177,14 +216,16 @@ function panelKey(interaction) {
   return `${interaction.guildId}:${interaction.user.id}`;
 }
 
+// PANEL MENUS WITH EMOJIS
 function makePanelRows() {
   const eventMenu = new StringSelectMenuBuilder()
     .setCustomId('pwlog_event')
-    .setPlaceholder('📋 Choose a log event')
+    .setPlaceholder('🎭 Choose a log event')
     .addOptions(
       Object.entries(EVENTS).map(([value, label]) => ({
         label,
-        value
+        value,
+        emoji: EVENT_EMOJIS[value] || '📋'
       }))
     );
 
@@ -214,10 +255,10 @@ function panelEmbed() {
     .setTitle('💙 PW VENOM LOG')
     .setDescription(
       '**SERVER LOG SETTINGS**\n\n' +
-      '📋 Select the event.\n' +
+      '🎭 Select a log event from the menu.\n' +
       '📁 Select the destination channel.\n' +
       '💾 Press SAVE to store your settings.\n\n' +
-      'Each event has its own log channel.'
+      'Each event has its own emoji and log channel.'
     )
     .setThumbnail(client.user.displayAvatarURL())
     .setFooter({ text: 'PW VENOM LOG SYSTEM' });
@@ -227,7 +268,7 @@ client.once('ready', () => {
   console.log(`PW VENOM LOG online as ${client.user.tag}`);
 });
 
-// PANEL AND COMMANDS
+// COMMANDS AND PANEL
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
@@ -249,7 +290,7 @@ client.on('interactionCreate', async interaction => {
 
         const lines = Object.entries(EVENTS).map(([key, name]) => {
           const id = guildConfig[key];
-          return `**${name}:** ${id ? `<#${id}>` : 'Not configured'}`;
+          return `${EVENT_EMOJIS[key]} **${name}:** ${id ? `<#${id}>` : 'Not configured'}`;
         });
 
         return interaction.reply({
@@ -258,7 +299,7 @@ client.on('interactionCreate', async interaction => {
               .setColor(0x168CFF)
               .setTitle('💙 PW VENOM LOG SETTINGS')
               .setDescription(lines.join('\n'))
-              .setThumbnail(interaction.guild.iconURL())
+              .setThumbnail(interaction.guild.iconURL() || client.user.displayAvatarURL())
               .setTimestamp()
           ],
           ephemeral: true
@@ -271,9 +312,9 @@ client.on('interactionCreate', async interaction => {
         const sent = await sendLog(
           interaction.guild,
           event,
-          '🧪 LOG TEST',
+          `${EVENT_EMOJIS[event]} LOG TEST`,
           `Test for **${EVENTS[event]}**`,
-          { avatar: interaction.user.displayAvatarURL() }
+          { avatar: interaction.user.displayAvatarURL({ size: 512 }) }
         );
 
         return interaction.reply({
@@ -285,6 +326,7 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
+    // EVENT SELECT
     if (
       interaction.isStringSelectMenu() &&
       interaction.customId === 'pwlog_event'
@@ -301,11 +343,15 @@ client.on('interactionCreate', async interaction => {
       data.event = interaction.values[0];
 
       return interaction.reply({
-        content: `✅ Selected: **${EVENTS[data.event]}**. Now choose a channel.`,
+        content:
+          `${EVENT_EMOJIS[data.event]} **${EVENTS[data.event]}**\n` +
+          '✅ Log selected successfully!\n' +
+          '📁 Now choose a channel.',
         ephemeral: true
       });
     }
 
+    // CHANNEL SELECT
     if (
       interaction.isChannelSelectMenu() &&
       interaction.customId === 'pwlog_channel'
@@ -322,11 +368,12 @@ client.on('interactionCreate', async interaction => {
       data.channel = interaction.values[0];
 
       return interaction.reply({
-        content: `✅ Channel selected: <#${data.channel}>. Press SAVE.`,
+        content: `📁 Channel selected: <#${data.channel}>. Press SAVE.`,
         ephemeral: true
       });
     }
 
+    // SAVE
     if (
       interaction.isButton() &&
       interaction.customId === 'pwlog_save'
@@ -380,8 +427,8 @@ client.on('interactionCreate', async interaction => {
       return interaction.reply({
         content:
           `💾 **SAVED SUCCESSFULLY**\n` +
-          `Event: **${EVENTS[savedEvent]}**\n` +
-          `Channel: <#${savedChannel}>`,
+          `${EVENT_EMOJIS[savedEvent]} Event: **${EVENTS[savedEvent]}**\n` +
+          `📁 Channel: <#${savedChannel}>`,
         ephemeral: true
       });
     }
@@ -402,7 +449,7 @@ client.on('guildMemberAdd', member => {
   sendLog(
     member.guild,
     'memberJoin',
-    '📥 MEMBER JOIN',
+    '🟢 MEMBER JOIN',
     `**Member:** ${member.user.tag}\n**ID:** ${member.id}\n**Account:** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
     { avatar: member.user.displayAvatarURL({ size: 512 }) }
   );
@@ -421,14 +468,17 @@ client.on('guildMemberRemove', async member => {
       member.guild,
       'memberKick',
       '👢 MEMBER KICK',
-      `**Member:** ${member.user.tag}\n**Moderator:** ${executor.executor.tag}`,
-      { avatar: member.user.displayAvatarURL({ size: 512 }), color: 0xE67E22 }
+      `**Member:** ${member.user.tag}\n**Moderator:** ${executor.executor?.tag || 'Unknown'}`,
+      {
+        avatar: member.user.displayAvatarURL({ size: 512 }),
+        color: 0xE67E22
+      }
     );
   } else {
     sendLog(
       member.guild,
       'memberLeave',
-      '📤 MEMBER LEAVE',
+      '🔴 MEMBER LEAVE',
       `**Member:** ${member.user.tag}\n**ID:** ${member.id}`,
       { avatar: member.user.displayAvatarURL({ size: 512 }) }
     );
@@ -448,7 +498,10 @@ client.on('guildBanAdd', async ban => {
     'ban',
     '🔨 MEMBER BANNED',
     `**User:** ${ban.user.tag}\n**Moderator:** ${entry?.executor?.tag || 'Unknown'}`,
-    { avatar: ban.user.displayAvatarURL({ size: 512 }), color: 0xE74C3C }
+    {
+      avatar: ban.user.displayAvatarURL({ size: 512 }),
+      color: 0xE74C3C
+    }
   );
 });
 
@@ -714,7 +767,7 @@ client.on('webhookUpdate', channel => {
   );
 });
 
-// SERVER UPDATE: NAME / ICON / BANNER
+// SERVER UPDATE
 client.on('guildUpdate', (oldGuild, newGuild) => {
   const changes = [];
 
