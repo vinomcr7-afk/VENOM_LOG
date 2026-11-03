@@ -1,5 +1,3 @@
-// PW VENOM LOG
-// Discord.js v14
 
 const {
   Client,
@@ -9,20 +7,26 @@ const {
   Routes,
   SlashCommandBuilder,
   ChannelType,
+  ChannelSelectMenuBuilder,
   EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   PermissionFlagsBits,
   AuditLogEvent
 } = require('discord.js');
 
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
 if (!TOKEN || !CLIENT_ID) {
-  console.error('Missing DISCORD_TOKEN or CLIENT_ID environment variable.');
+  console.error('Missing DISCORD_TOKEN or CLIENT_ID');
   process.exit(1);
 }
 
@@ -32,9 +36,9 @@ const EVENTS = {
   memberJoin: 'Member Join',
   memberLeave: 'Member Leave',
   memberKick: 'Member Kick',
-  ban: 'Member Ban',
-  unban: 'Member Unban',
-  timeout: 'Member Timeout',
+  ban: 'Ban',
+  unban: 'Unban',
+  timeout: 'Timeout',
   timeoutRemoved: 'Timeout Removed',
   nicknameUpdate: 'Nickname Update',
   messageDelete: 'Message Delete',
@@ -57,12 +61,13 @@ function loadConfig() {
       return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     }
   } catch (error) {
-    console.error('Config load error:', error);
+    console.error('Config error:', error);
   }
   return {};
 }
 
 const config = loadConfig();
+const panelData = new Map();
 
 function saveConfig() {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
@@ -87,25 +92,8 @@ const client = new Client({
 
 const commands = [
   new SlashCommandBuilder()
-    .setName('setlog')
-    .setDescription('Set a separate log channel for an event')
-    .addStringOption(option =>
-      option.setName('event')
-        .setDescription('Choose the event')
-        .setRequired(true)
-        .addChoices(
-          ...Object.entries(EVENTS).map(([value, name]) => ({
-            name,
-            value
-          }))
-        )
-    )
-    .addChannelOption(option =>
-      option.setName('channel')
-        .setDescription('Choose the log channel')
-        .addChannelTypes(ChannelType.GuildText)
-        .setRequired(true)
-    )
+    .setName('logpanel')
+    .setDescription('Open the PW VENOM LOG settings panel')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
@@ -145,7 +133,7 @@ async function registerCommands() {
     );
   }
 
-  console.log('Slash commands registered.');
+  console.log('Commands registered.');
 }
 
 async function sendLog(guild, event, title, description, color = 0x168CFF) {
@@ -153,7 +141,7 @@ async function sendLog(guild, event, title, description, color = 0x168CFF) {
   if (!channelId) return false;
 
   const channel = await guild.channels.fetch(channelId).catch(() => null);
-  if (!channel || !channel.isTextBased()) return false;
+  if (!channel || !channel.isTextBased() || !channel.send) return false;
 
   const embed = new EmbedBuilder()
     .setColor(color)
@@ -162,11 +150,13 @@ async function sendLog(guild, event, title, description, color = 0x168CFF) {
     .setTimestamp()
     .setFooter({ text: 'PW VENOM LOG' });
 
-  await channel.send({ embeds: [embed] }).catch(error => {
-    console.error('Log send error:', error);
-  });
-
-  return true;
+  try {
+    await channel.send({ embeds: [embed] });
+    return true;
+  } catch (error) {
+    console.error('Send log error:', error);
+    return false;
+  }
 }
 
 async function findExecutor(guild, type, targetId) {
@@ -182,70 +172,234 @@ async function findExecutor(guild, type, targetId) {
   }
 }
 
+function panelKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function makePanelRows() {
+  const eventMenu = new StringSelectMenuBuilder()
+    .setCustomId('pwlog_event')
+    .setPlaceholder('Choose a log event')
+    .addOptions(
+      Object.entries(EVENTS).map(([value, label]) => ({
+        label,
+        value
+      }))
+    );
+
+  const channelMenu = new ChannelSelectMenuBuilder()
+    .setCustomId('pwlog_channel')
+    .setPlaceholder('Choose a logging channel')
+    .setChannelTypes(ChannelType.GuildText)
+    .setMinValues(1)
+    .setMaxValues(1);
+
+  const saveButton = new ButtonBuilder()
+    .setCustomId('pwlog_save')
+    .setLabel('SAVE')
+    .setEmoji('💾')
+    .setStyle(ButtonStyle.Success);
+
+  return [
+    new ActionRowBuilder().addComponents(eventMenu),
+    new ActionRowBuilder().addComponents(channelMenu),
+    new ActionRowBuilder().addComponents(saveButton)
+  ];
+}
+
+function panelEmbed() {
+  return new EmbedBuilder()
+    .setColor(0x168CFF)
+    .setTitle('💙 PW VENOM LOG')
+    .setDescription(
+      '**Logging Settings**\n\n' +
+      '1️⃣ Choose the event you want to log.\n' +
+      '2️⃣ Choose the destination channel.\n' +
+      '3️⃣ Press 💾 SAVE to save your settings.\n\n' +
+      'Each event can have its own channel.'
+    )
+    .setFooter({ text: 'PW VENOM LOG SYSTEM' });
+}
+
 client.once('ready', () => {
   console.log(`PW VENOM LOG online as ${client.user.tag}`);
 });
 
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
+  try {
+    if (interaction.isChatInputCommand()) {
 
-  if (interaction.commandName === 'setlog') {
-    const event = interaction.options.getString('event');
-    const channel = interaction.options.getChannel('channel');
+      if (interaction.commandName === 'logpanel') {
+        panelData.set(panelKey(interaction), {
+          event: null,
+          channel: null
+        });
 
-    config[interaction.guildId] ??= {};
-    config[interaction.guildId][event] = channel.id;
-    saveConfig();
+        return interaction.reply({
+          embeds: [panelEmbed()],
+          components: makePanelRows(),
+          ephemeral: true
+        });
+      }
 
-    return interaction.reply({
-      content: `✅ ${EVENTS[event]} logs will be sent to ${channel}.`,
-      ephemeral: true
-    });
-  }
+      if (interaction.commandName === 'loginfo') {
+        const guildConfig = config[interaction.guildId] || {};
 
-  if (interaction.commandName === 'loginfo') {
-    const guildConfig = config[interaction.guildId] || {};
+        const lines = Object.entries(EVENTS).map(([key, name]) => {
+          const id = guildConfig[key];
+          return `**${name}:** ${id ? `<#${id}>` : 'Not configured'}`;
+        });
 
-    const lines = Object.entries(EVENTS).map(([key, name]) => {
-      const channelId = guildConfig[key];
-      return `**${name}:** ${channelId ? `<#${channelId}>` : 'Not configured'}`;
-    });
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x168CFF)
+              .setTitle('💙 PW VENOM LOG SETTINGS')
+              .setDescription(lines.join('\n'))
+              .setTimestamp()
+          ],
+          ephemeral: true
+        });
+      }
 
-    return interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x168CFF)
-          .setTitle('PW VENOM LOG — CONFIGURATION')
-          .setDescription(lines.join('\n'))
-          .setTimestamp()
-      ],
-      ephemeral: true
-    });
-  }
+      if (interaction.commandName === 'logtest') {
+        const event = interaction.options.getString('event');
 
-  if (interaction.commandName === 'logtest') {
-    const event = interaction.options.getString('event');
-    const sent = await sendLog(
-      interaction.guild,
-      event,
-      '🧪 LOG TEST',
-      `This is a test for **${EVENTS[event]}**.`
-    );
+        const sent = await sendLog(
+          interaction.guild,
+          event,
+          '🧪 LOG TEST',
+          `Test for **${EVENTS[event]}**`
+        );
 
-    return interaction.reply({
-      content: sent
-        ? `✅ Test sent to the configured ${EVENTS[event]} channel.`
-        : `❌ No channel configured for ${EVENTS[event]}. Use /setlog first.`,
-      ephemeral: true
-    });
+        return interaction.reply({
+          content: sent
+            ? '✅ Test sent successfully.'
+            : '❌ No channel configured. Use /logpanel.',
+          ephemeral: true
+        });
+      }
+    }
+
+    if (
+      interaction.isStringSelectMenu() &&
+      interaction.customId === 'pwlog_event'
+    ) {
+      const data = panelData.get(panelKey(interaction));
+
+      if (!data) {
+        return interaction.reply({
+          content: '❌ Open /logpanel again.',
+          ephemeral: true
+        });
+      }
+
+      data.event = interaction.values[0];
+      panelData.set(panelKey(interaction), data);
+
+      return interaction.reply({
+        content: `✅ Event selected: **${EVENTS[data.event]}**. Now choose a channel.`,
+        ephemeral: true
+      });
+    }
+
+    if (
+      interaction.isChannelSelectMenu() &&
+      interaction.customId === 'pwlog_channel'
+    ) {
+      const data = panelData.get(panelKey(interaction));
+
+      if (!data) {
+        return interaction.reply({
+          content: '❌ Open /logpanel again.',
+          ephemeral: true
+        });
+      }
+
+      data.channel = interaction.values[0];
+      panelData.set(panelKey(interaction), data);
+
+      return interaction.reply({
+        content: `✅ Channel selected: <#${data.channel}>. Press SAVE.`,
+        ephemeral: true
+      });
+    }
+
+    if (
+      interaction.isButton() &&
+      interaction.customId === 'pwlog_save'
+    ) {
+      const data = panelData.get(panelKey(interaction));
+
+      if (!data || !data.event || !data.channel) {
+        return interaction.reply({
+          content: '❌ Choose an event and a channel first.',
+          ephemeral: true
+        });
+      }
+
+      const channel = await interaction.guild.channels
+        .fetch(data.channel)
+        .catch(() => null);
+
+      if (!channel || !channel.isTextBased()) {
+        return interaction.reply({
+          content: '❌ The selected channel is unavailable.',
+          ephemeral: true
+        });
+      }
+
+      const botMember = interaction.guild.members.me;
+      const permissions = channel.permissionsFor(botMember);
+
+      if (!permissions?.has([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.EmbedLinks
+      ])) {
+        return interaction.reply({
+          content: '❌ The bot needs View Channel, Send Messages and Embed Links permissions in that channel.',
+          ephemeral: true
+        });
+      }
+
+      config[interaction.guildId] ??= {};
+      config[interaction.guildId][data.event] = data.channel;
+      saveConfig();
+
+      panelData.set(panelKey(interaction), {
+        event: null,
+        channel: null
+      });
+
+      return interaction.reply({
+        content:
+          `💾 **SAVED SUCCESSFULLY**\n` +
+          `Event: **${EVENTS[data.event]}**\n` +
+          `Channel: <#${data.channel}>`,
+        ephemeral: true
+      });
+    }
+
+  } catch (error) {
+    console.error('Interaction error:', error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: '❌ An error occurred. Please try again.',
+        ephemeral: true
+      }).catch(() => {});
+    }
   }
 });
 
+// MEMBER JOIN
 client.on('guildMemberAdd', member => {
   sendLog(member.guild, 'memberJoin', '📥 MEMBER JOIN',
     `${member.user.tag} joined the server.\nID: ${member.id}`);
 });
 
+// MEMBER LEAVE / KICK
 client.on('guildMemberRemove', async member => {
   const executor = await findExecutor(
     member.guild,
@@ -254,14 +408,15 @@ client.on('guildMemberRemove', async member => {
   );
 
   if (executor) {
-    await sendLog(member.guild, 'memberKick', '👢 MEMBER KICK',
+    sendLog(member.guild, 'memberKick', '👢 MEMBER KICK',
       `${member.user.tag} was kicked.\nBy: ${executor.tag}`);
   } else {
-    await sendLog(member.guild, 'memberLeave', '📤 MEMBER LEAVE',
+    sendLog(member.guild, 'memberLeave', '📤 MEMBER LEAVE',
       `${member.user.tag} left the server.\nID: ${member.id}`);
   }
 });
 
+// BAN
 client.on('guildBanAdd', async ban => {
   const executor = await findExecutor(
     ban.guild,
@@ -270,10 +425,11 @@ client.on('guildBanAdd', async ban => {
   );
 
   sendLog(ban.guild, 'ban', '🔨 MEMBER BANNED',
-    `${ban.user.tag} was banned.\nBy: ${executor?.tag || 'Unknown'}`,
+    `${ban.user.tag}\nBy: ${executor?.tag || 'Unknown'}`,
     0xE74C3C);
 });
 
+// UNBAN
 client.on('guildBanRemove', async ban => {
   const executor = await findExecutor(
     ban.guild,
@@ -282,17 +438,20 @@ client.on('guildBanRemove', async ban => {
   );
 
   sendLog(ban.guild, 'unban', '🔓 MEMBER UNBANNED',
-    `${ban.user.tag} was unbanned.\nBy: ${executor?.tag || 'Unknown'}`);
+    `${ban.user.tag}\nBy: ${executor?.tag || 'Unknown'}`);
 });
 
-client.on('guildMemberUpdate', async (oldMember, newMember) => {
+// MEMBER UPDATE
+client.on('guildMemberUpdate', (oldMember, newMember) => {
   if (oldMember.nickname !== newMember.nickname) {
     sendLog(newMember.guild, 'nicknameUpdate', '✏️ NICKNAME UPDATE',
       `${newMember.user.tag}\nOld: ${oldMember.nickname || 'None'}\nNew: ${newMember.nickname || 'None'}`);
   }
 
-  if (oldMember.communicationDisabledUntilTimestamp !==
-      newMember.communicationDisabledUntilTimestamp) {
+  if (
+    oldMember.communicationDisabledUntilTimestamp !==
+    newMember.communicationDisabledUntilTimestamp
+  ) {
     const timedOut = newMember.communicationDisabledUntilTimestamp;
 
     sendLog(newMember.guild, timedOut ? 'timeout' : 'timeoutRemoved',
@@ -303,24 +462,28 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
   }
 });
 
-client.on('messageDelete', async message => {
+// MESSAGE DELETE
+client.on('messageDelete', message => {
   if (!message.guild || message.author?.bot) return;
 
   sendLog(message.guild, 'messageDelete', '🗑️ MESSAGE DELETED',
     `Author: ${message.author?.tag || 'Unknown'}\nChannel: ${message.channel}\nContent: ${message.content || 'Unavailable'}`);
 });
 
-client.on('messageUpdate', async (oldMessage, newMessage) => {
+// MESSAGE EDIT
+client.on('messageUpdate', (oldMessage, newMessage) => {
   if (!newMessage.guild || newMessage.author?.bot) return;
   if (oldMessage.partial || newMessage.partial) return;
   if (oldMessage.content === newMessage.content) return;
 
   sendLog(newMessage.guild, 'messageEdit', '📝 MESSAGE EDITED',
-    `Author: ${newMessage.author.tag}\nChannel: ${newMessage.channel}\nBefore: ${oldMessage.content || 'Empty'}\nAfter: ${newMessage.content || 'Empty'}\n[Jump to message](${newMessage.url})`);
+    `Author: ${newMessage.author.tag}\nChannel: ${newMessage.channel}\nBefore: ${oldMessage.content || 'Empty'}\nAfter: ${newMessage.content || 'Empty'}\n${newMessage.url}`);
 });
 
+// CHANNEL CREATE
 client.on('channelCreate', async channel => {
   if (!channel.guild) return;
+
   const executor = await findExecutor(
     channel.guild,
     AuditLogEvent.ChannelCreate,
@@ -331,8 +494,10 @@ client.on('channelCreate', async channel => {
     `Channel: ${channel.name}\nBy: ${executor?.tag || 'Unknown'}`);
 });
 
+// CHANNEL DELETE
 client.on('channelDelete', async channel => {
   if (!channel.guild) return;
+
   const executor = await findExecutor(
     channel.guild,
     AuditLogEvent.ChannelDelete,
@@ -343,6 +508,7 @@ client.on('channelDelete', async channel => {
     `Channel: ${channel.name}\nBy: ${executor?.tag || 'Unknown'}`);
 });
 
+// CHANNEL UPDATE
 client.on('channelUpdate', (oldChannel, newChannel) => {
   if (!newChannel.guild) return;
 
@@ -350,6 +516,7 @@ client.on('channelUpdate', (oldChannel, newChannel) => {
     `Channel: ${newChannel.name}\nID: ${newChannel.id}`);
 });
 
+// ROLE CREATE
 client.on('roleCreate', async role => {
   const executor = await findExecutor(
     role.guild,
@@ -361,6 +528,7 @@ client.on('roleCreate', async role => {
     `Role: ${role.name}\nBy: ${executor?.tag || 'Unknown'}`);
 });
 
+// ROLE DELETE
 client.on('roleDelete', async role => {
   const executor = await findExecutor(
     role.guild,
@@ -372,11 +540,13 @@ client.on('roleDelete', async role => {
     `Role: ${role.name}\nBy: ${executor?.tag || 'Unknown'}`);
 });
 
+// ROLE UPDATE
 client.on('roleUpdate', (oldRole, newRole) => {
   sendLog(newRole.guild, 'roleUpdate', '⚙️ ROLE UPDATED',
     `Role: ${newRole.name}\nID: ${newRole.id}`);
 });
 
+// VOICE
 client.on('voiceStateUpdate', (oldState, newState) => {
   const member = newState.member || oldState.member;
   if (!member) return;
@@ -393,16 +563,13 @@ client.on('voiceStateUpdate', (oldState, newState) => {
   }
 });
 
+// SERVER UPDATE
 client.on('guildUpdate', (oldGuild, newGuild) => {
   sendLog(newGuild, 'serverUpdate', '⚙️ SERVER UPDATED',
     `Server name: ${oldGuild.name} → ${newGuild.name}`);
 });
 
-client.on('error', error => {
-  console.error('Discord client error:', error);
-});
-
-const http = require('node:http');
+// HTTP SERVER FOR RENDER
 const PORT = process.env.PORT || 10000;
 
 const server = http.createServer((req, res) => {
