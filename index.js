@@ -21,7 +21,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 
-// ENVIRONMENT
+// ================= CONFIG =================
+
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
@@ -31,11 +32,13 @@ if (!TOKEN || !CLIENT_ID) {
   process.exit(1);
 }
 
-// FILES
-const CONFIG_FILE = path.join(__dirname, 'pw-venom-config.json');
-const LOG_BANNER = path.join(__dirname, 'venom.gif');
+const CONFIG_FILE = path.join(process.cwd(), 'pw-venom-config.json');
 
-// EVENTS
+const PANEL_IMAGE_URL =
+  'https://cdn.discordapp.com/attachments/1566140735235817593/1567243375407534160/lv_0_20261026164646.gif?ex=6aeb78a2&is=6aea2722&hm=06494fff3a31cc7406b73597473da856b0f97431dc6867fe7522e617876a78a6&';
+
+// ================= LOG EVENTS =================
+
 const EVENTS = {
   memberJoin: 'Member Join',
   memberLeave: 'Member Leave',
@@ -64,7 +67,7 @@ const EVENTS = {
   serverUpdate: 'Server Update'
 };
 
-// EMOJIS
+// Emoji for every event
 const EVENT_EMOJIS = {
   memberJoin: '🟢',
   memberLeave: '🔴',
@@ -82,18 +85,19 @@ const EVENT_EMOJIS = {
   channelPerms: '🔐',
   roleCreate: '🆕',
   roleDelete: '❌',
-  roleUpdate: '⚙️',
+  roleUpdate: '🛠️',
   voiceJoin: '🔊',
   voiceLeave: '🔇',
   voiceMove: '🔁',
   stageCreate: '🎤',
-  stageDelete: '🎤',
-  stageUpdate: '🎙️',
+  stageDelete: '🎙️',
+  stageUpdate: '🎚️',
   webhookUpdate: '🔗',
   serverUpdate: '🌐'
 };
 
-// CONFIG
+// ================= DATA =================
+
 function loadConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -106,10 +110,12 @@ const config = loadConfig();
 const panelData = new Map();
 
 function saveConfig() {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  fs.writeFileSync(
+    CONFIG_FILE,
+    JSON.stringify(config, null, 2)
+  );
 }
 
-// CLIENT
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -128,23 +134,29 @@ const client = new Client({
   ]
 });
 
-// SLASH COMMANDS
+// ================= COMMANDS =================
+
 const commands = [
   new SlashCommandBuilder()
     .setName('logpanel')
     .setDescription('Open PW VENOM LOG settings')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    ),
 
   new SlashCommandBuilder()
     .setName('loginfo')
     .setDescription('Show configured log channels')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    ),
 
   new SlashCommandBuilder()
     .setName('logtest')
     .setDescription('Test a log channel')
     .addStringOption(option =>
-      option.setName('event')
+      option
+        .setName('event')
         .setDescription('Choose an event')
         .setRequired(true)
         .addChoices(
@@ -154,10 +166,11 @@ const commands = [
           }))
         )
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    )
 ].map(command => command.toJSON());
 
-// REGISTER COMMANDS
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 
@@ -176,19 +189,29 @@ async function registerCommands() {
   console.log('Commands registered.');
 }
 
-// SEND LOG
-async function sendLog(guild, event, title, description, options = {}) {
+// ================= SEND LOG =================
+
+async function sendLog(
+  guild,
+  event,
+  title,
+  description,
+  options = {}
+) {
   const channelId = config[guild.id]?.[event];
+
   if (!channelId) return false;
 
-  const channel = await guild.channels.fetch(channelId).catch(() => null);
+  const channel = await guild.channels
+    .fetch(channelId)
+    .catch(() => null);
 
   if (!channel || !channel.isTextBased() || !channel.send) {
     return false;
   }
 
   const embed = new EmbedBuilder()
-    .setColor(options.color || 0xB00000)
+    .setColor(options.color || 0x168CFF)
     .setTitle(title)
     .setDescription(description || 'No details available.')
     .setTimestamp()
@@ -197,9 +220,17 @@ async function sendLog(guild, event, title, description, options = {}) {
       iconURL: client.user.displayAvatarURL()
     });
 
-  if (options.avatar) embed.setThumbnail(options.avatar);
-  if (options.image) embed.setImage(options.image);
-  if (options.guildImage) embed.setThumbnail(options.guildImage);
+  if (options.avatar) {
+    embed.setThumbnail(options.avatar);
+  }
+
+  if (options.image) {
+    embed.setImage(options.image);
+  }
+
+  if (options.guildImage) {
+    embed.setThumbnail(options.guildImage);
+  }
 
   try {
     await channel.send({ embeds: [embed] });
@@ -210,7 +241,8 @@ async function sendLog(guild, event, title, description, options = {}) {
   }
 }
 
-// AUDIT LOG
+// ================= AUDIT LOG =================
+
 async function findExecutor(guild, type, targetId) {
   try {
     const logs = await guild.fetchAuditLogs({
@@ -229,21 +261,21 @@ async function findExecutor(guild, type, targetId) {
   }
 }
 
-// PANEL KEY
+// ================= PANEL =================
+
 function panelKey(interaction) {
   return `${interaction.guildId}:${interaction.user.id}`;
 }
 
-// PANEL MENUS
 function makePanelRows() {
   const eventMenu = new StringSelectMenuBuilder()
     .setCustomId('pwlog_event')
-    .setPlaceholder('🎭 Choose a log event')
+    .setPlaceholder('📋 Choose a log event')
     .addOptions(
       Object.entries(EVENTS).map(([value, label]) => ({
         label,
         value,
-        emoji: EVENT_EMOJIS[value] || '📋'
+        emoji: EVENT_EMOJIS[value]
       }))
     );
 
@@ -267,44 +299,38 @@ function makePanelRows() {
   ];
 }
 
-// PANEL EMBED WITH VINOM GIF
+// Panel with VINOM GIF
 function panelEmbed() {
   return new EmbedBuilder()
-    .setColor(0xB00000)
-    .setTitle('💀 VINOM LOG')
+    .setColor(0x168CFF)
+    .setTitle('💙 PW VENOM LOG')
     .setDescription(
-      '**WELCOME TO VINOM LOG SYSTEM**\n\n' +
-      '🎭 Select your log event.\n' +
-      '📁 Select your destination channel.\n' +
-      '💾 Press SAVE to save your settings.\n\n' +
+      '**SERVER LOG SETTINGS**\n\n' +
+      '📋 Select the event.\n' +
+      '📁 Select the destination channel.\n' +
+      '💾 Press SAVE to store your settings.\n\n' +
       '**Each event has its own log channel.**'
     )
-    .setImage('attachment://venom.gif')
+    .setImage(PANEL_IMAGE_URL)
     .setFooter({
-      text: 'PW VENOM LOG SYSTEM',
-      iconURL: client.user.displayAvatarURL()
+      text: 'PW VENOM LOG SYSTEM'
     });
 }
 
-// READY
+// ================= READY =================
+
 client.once('ready', () => {
   console.log(`PW VENOM LOG online as ${client.user.tag}`);
 });
 
-// INTERACTIONS
+// ================= INTERACTIONS =================
+
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
 
       // LOG PANEL
       if (interaction.commandName === 'logpanel') {
-        if (!fs.existsSync(LOG_BANNER)) {
-          return interaction.reply({
-            content: '❌ venom.gif is missing. Upload it beside index.js on GitHub.',
-            ephemeral: true
-          });
-        }
-
         panelData.set(panelKey(interaction), {
           event: null,
           channel: null
@@ -312,10 +338,6 @@ client.on('interactionCreate', async interaction => {
 
         return interaction.reply({
           embeds: [panelEmbed()],
-          files: [{
-            attachment: LOG_BANNER,
-            name: 'venom.gif'
-          }],
           components: makePanelRows(),
           ephemeral: true
         });
@@ -333,18 +355,18 @@ client.on('interactionCreate', async interaction => {
           }`;
         });
 
+        const embed = new EmbedBuilder()
+          .setColor(0x168CFF)
+          .setTitle('💙 PW VENOM LOG SETTINGS')
+          .setDescription(lines.join('\n'))
+          .setTimestamp();
+
+        const icon = interaction.guild.iconURL();
+
+        if (icon) embed.setThumbnail(icon);
+
         return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xB00000)
-              .setTitle('💀 VINOM LOG SETTINGS')
-              .setDescription(lines.join('\n'))
-              .setThumbnail(
-                interaction.guild.iconURL() ||
-                client.user.displayAvatarURL()
-              )
-              .setTimestamp()
-          ],
+          embeds: [embed],
           ephemeral: true
         });
       }
@@ -356,10 +378,10 @@ client.on('interactionCreate', async interaction => {
         const sent = await sendLog(
           interaction.guild,
           event,
-          `${EVENT_EMOJIS[event]} LOG TEST`,
+          '🧪 LOG TEST',
           `Test for **${EVENTS[event]}**`,
           {
-            avatar: interaction.user.displayAvatarURL({ size: 512 })
+            avatar: interaction.user.displayAvatarURL()
           }
         );
 
@@ -390,9 +412,8 @@ client.on('interactionCreate', async interaction => {
 
       return interaction.reply({
         content:
-          `${EVENT_EMOJIS[data.event]} **${EVENTS[data.event]}**\n` +
-          '✅ Log selected successfully!\n' +
-          '📁 Now choose a channel.',
+          `${EVENT_EMOJIS[data.event]} Selected: **${EVENTS[data.event]}**. ` +
+          'Now choose a channel.',
         ephemeral: true
       });
     }
@@ -414,12 +435,12 @@ client.on('interactionCreate', async interaction => {
       data.channel = interaction.values[0];
 
       return interaction.reply({
-        content: `📁 Channel selected: <#${data.channel}>. Press SAVE.`,
+        content: `✅ Channel selected: <#${data.channel}>. Press SAVE.`,
         ephemeral: true
       });
     }
 
-    // SAVE
+    // SAVE BUTTON
     if (
       interaction.isButton() &&
       interaction.customId === 'pwlog_save'
@@ -453,7 +474,8 @@ client.on('interactionCreate', async interaction => {
         PermissionFlagsBits.EmbedLinks
       ])) {
         return interaction.reply({
-          content: '❌ Give the bot View Channel, Send Messages and Embed Links.',
+          content:
+            '❌ Give the bot View Channel, Send Messages and Embed Links.',
           ephemeral: true
         });
       }
@@ -461,7 +483,16 @@ client.on('interactionCreate', async interaction => {
       config[interaction.guildId] ??= {};
       config[interaction.guildId][data.event] = data.channel;
 
-      saveConfig();
+      try {
+        saveConfig();
+      } catch (error) {
+        console.error('Config save error:', error);
+
+        return interaction.reply({
+          content: '❌ Could not save settings.',
+          ephemeral: true
+        });
+      }
 
       const savedEvent = data.event;
       const savedChannel = data.channel;
@@ -492,20 +523,24 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// MEMBER JOIN
+// ================= MEMBER JOIN =================
+
 client.on('guildMemberAdd', member => {
   sendLog(
     member.guild,
     'memberJoin',
-    '🟢 MEMBER JOIN',
-    `**Member:** ${member.user.tag}\n**ID:** ${member.id}\n**Account:** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
+    '📥 MEMBER JOIN',
+    `**Member:** ${member.user.tag}\n` +
+    `**ID:** ${member.id}\n` +
+    `**Account:** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
     {
       avatar: member.user.displayAvatarURL({ size: 512 })
     }
   );
 });
 
-// MEMBER LEAVE / KICK
+// ================= MEMBER LEAVE / KICK =================
+
 client.on('guildMemberRemove', async member => {
   const executor = await findExecutor(
     member.guild,
@@ -513,12 +548,13 @@ client.on('guildMemberRemove', async member => {
     member.id
   );
 
-  if (executor && executor.createdTimestamp > Date.now() - 8000) {
+  if (executor) {
     sendLog(
       member.guild,
       'memberKick',
       '👢 MEMBER KICK',
-      `**Member:** ${member.user.tag}\n**Moderator:** ${executor.executor?.tag || 'Unknown'}`,
+      `**Member:** ${member.user.tag}\n` +
+      `**Moderator:** ${executor.executor?.tag || 'Unknown'}`,
       {
         avatar: member.user.displayAvatarURL({ size: 512 }),
         color: 0xE67E22
@@ -528,7 +564,7 @@ client.on('guildMemberRemove', async member => {
     sendLog(
       member.guild,
       'memberLeave',
-      '🔴 MEMBER LEAVE',
+      '📤 MEMBER LEAVE',
       `**Member:** ${member.user.tag}\n**ID:** ${member.id}`,
       {
         avatar: member.user.displayAvatarURL({ size: 512 })
@@ -537,7 +573,8 @@ client.on('guildMemberRemove', async member => {
   }
 });
 
-// BAN
+// ================= BAN =================
+
 client.on('guildBanAdd', async ban => {
   const entry = await findExecutor(
     ban.guild,
@@ -549,7 +586,8 @@ client.on('guildBanAdd', async ban => {
     ban.guild,
     'ban',
     '🔨 MEMBER BANNED',
-    `**User:** ${ban.user.tag}\n**Moderator:** ${entry?.executor?.tag || 'Unknown'}`,
+    `**User:** ${ban.user.tag}\n` +
+    `**Moderator:** ${entry?.executor?.tag || 'Unknown'}`,
     {
       avatar: ban.user.displayAvatarURL({ size: 512 }),
       color: 0xE74C3C
@@ -557,7 +595,8 @@ client.on('guildBanAdd', async ban => {
   );
 });
 
-// UNBAN
+// ================= UNBAN =================
+
 client.on('guildBanRemove', async ban => {
   const entry = await findExecutor(
     ban.guild,
@@ -569,14 +608,16 @@ client.on('guildBanRemove', async ban => {
     ban.guild,
     'unban',
     '🔓 MEMBER UNBANNED',
-    `**User:** ${ban.user.tag}\n**Moderator:** ${entry?.executor?.tag || 'Unknown'}`,
+    `**User:** ${ban.user.tag}\n` +
+    `**Moderator:** ${entry?.executor?.tag || 'Unknown'}`,
     {
       avatar: ban.user.displayAvatarURL({ size: 512 })
     }
   );
 });
 
-// MEMBER UPDATE
+// ================= MEMBER UPDATE =================
+
 client.on('guildMemberUpdate', (oldMember, newMember) => {
   const avatar = newMember.user.displayAvatarURL({ size: 512 });
 
@@ -585,7 +626,9 @@ client.on('guildMemberUpdate', (oldMember, newMember) => {
       newMember.guild,
       'nicknameUpdate',
       '✏️ NICKNAME UPDATED',
-      `**Member:** ${newMember.user.tag}\n**Old:** ${oldMember.nickname || 'None'}\n**New:** ${newMember.nickname || 'None'}`,
+      `**Member:** ${newMember.user.tag}\n` +
+      `**Old:** ${oldMember.nickname || 'None'}\n` +
+      `**New:** ${newMember.nickname || 'None'}`,
       { avatar }
     );
   }
@@ -600,15 +643,19 @@ client.on('guildMemberUpdate', (oldMember, newMember) => {
       newMember.guild,
       timeout ? 'timeout' : 'timeoutRemoved',
       timeout ? '⏳ MEMBER TIMEOUT' : '✅ TIMEOUT REMOVED',
-      `**Member:** ${newMember.user.tag}\n**Until:** ${
-        timeout ? `<t:${Math.floor(timeout / 1000)}:F>` : 'Removed'
+      `**Member:** ${newMember.user.tag}\n` +
+      `**Until:** ${
+        timeout
+          ? `<t:${Math.floor(timeout / 1000)}:F>`
+          : 'Removed'
       }`,
       { avatar }
     );
   }
 });
 
-// MESSAGE DELETE
+// ================= MESSAGE DELETE =================
+
 client.on('messageDelete', message => {
   if (!message.guild || message.author?.bot) return;
 
@@ -616,14 +663,17 @@ client.on('messageDelete', message => {
     message.guild,
     'messageDelete',
     '🗑️ MESSAGE DELETED',
-    `**Author:** ${message.author?.tag || 'Unknown'}\n**Channel:** ${message.channel}\n**Content:** ${message.content || 'Unavailable'}`,
+    `**Author:** ${message.author?.tag || 'Unknown'}\n` +
+    `**Channel:** ${message.channel}\n` +
+    `**Content:** ${message.content || 'Unavailable'}`,
     {
       avatar: message.author?.displayAvatarURL({ size: 512 })
     }
   );
 });
 
-// MESSAGE EDIT
+// ================= MESSAGE EDIT =================
+
 client.on('messageUpdate', (oldMessage, newMessage) => {
   if (!newMessage.guild || newMessage.author?.bot) return;
   if (oldMessage.partial || newMessage.partial) return;
@@ -633,14 +683,19 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
     newMessage.guild,
     'messageEdit',
     '📝 MESSAGE EDITED',
-    `**Author:** ${newMessage.author.tag}\n**Channel:** ${newMessage.channel}\n**Before:** ${oldMessage.content || 'Empty'}\n**After:** ${newMessage.content || 'Empty'}\n[Jump to message](${newMessage.url})`,
+    `**Author:** ${newMessage.author.tag}\n` +
+    `**Channel:** ${newMessage.channel}\n` +
+    `**Before:** ${oldMessage.content || 'Empty'}\n` +
+    `**After:** ${newMessage.content || 'Empty'}\n` +
+    `[Jump to message](${newMessage.url})`,
     {
       avatar: newMessage.author.displayAvatarURL({ size: 512 })
     }
   );
 });
 
-// CHANNEL CREATE
+// ================= CHANNEL CREATE =================
+
 client.on('channelCreate', async channel => {
   if (!channel.guild) return;
 
@@ -654,14 +709,16 @@ client.on('channelCreate', async channel => {
     channel.guild,
     'channelCreate',
     '📁 CHANNEL CREATED',
-    `**Channel:** ${channel.name}\n**Created by:** ${entry?.executor?.tag || 'Unknown'}`,
+    `**Channel:** ${channel.name}\n` +
+    `**Created by:** ${entry?.executor?.tag || 'Unknown'}`,
     {
       guildImage: channel.guild.iconURL({ size: 512 })
     }
   );
 });
 
-// CHANNEL DELETE
+// ================= CHANNEL DELETE =================
+
 client.on('channelDelete', async channel => {
   if (!channel.guild) return;
 
@@ -675,14 +732,16 @@ client.on('channelDelete', async channel => {
     channel.guild,
     'channelDelete',
     '🗑️ CHANNEL DELETED',
-    `**Channel:** ${channel.name}\n**Deleted by:** ${entry?.executor?.tag || 'Unknown'}`,
+    `**Channel:** ${channel.name}\n` +
+    `**Deleted by:** ${entry?.executor?.tag || 'Unknown'}`,
     {
       guildImage: channel.guild.iconURL({ size: 512 })
     }
   );
 });
 
-// CHANNEL UPDATE AND PERMISSIONS
+// ================= CHANNEL UPDATE =================
+
 client.on('channelUpdate', (oldChannel, newChannel) => {
   if (!newChannel.guild) return;
 
@@ -712,7 +771,8 @@ client.on('channelUpdate', (oldChannel, newChannel) => {
   }
 });
 
-// ROLE CREATE
+// ================= ROLE CREATE =================
+
 client.on('roleCreate', async role => {
   const entry = await findExecutor(
     role.guild,
@@ -724,14 +784,16 @@ client.on('roleCreate', async role => {
     role.guild,
     'roleCreate',
     '🆕 ROLE CREATED',
-    `**Role:** ${role.name}\n**Created by:** ${entry?.executor?.tag || 'Unknown'}`,
+    `**Role:** ${role.name}\n` +
+    `**Created by:** ${entry?.executor?.tag || 'Unknown'}`,
     {
       guildImage: role.guild.iconURL({ size: 512 })
     }
   );
 });
 
-// ROLE DELETE
+// ================= ROLE DELETE =================
+
 client.on('roleDelete', async role => {
   const entry = await findExecutor(
     role.guild,
@@ -743,27 +805,32 @@ client.on('roleDelete', async role => {
     role.guild,
     'roleDelete',
     '🗑️ ROLE DELETED',
-    `**Role:** ${role.name}\n**Deleted by:** ${entry?.executor?.tag || 'Unknown'}`,
+    `**Role:** ${role.name}\n` +
+    `**Deleted by:** ${entry?.executor?.tag || 'Unknown'}`,
     {
       guildImage: role.guild.iconURL({ size: 512 })
     }
   );
 });
 
-// ROLE UPDATE
+// ================= ROLE UPDATE =================
+
 client.on('roleUpdate', (oldRole, newRole) => {
   sendLog(
     newRole.guild,
     'roleUpdate',
     '⚙️ ROLE UPDATED',
-    `**Role:** ${newRole.name}\n**ID:** ${newRole.id}\n**Color:** ${newRole.hexColor}`,
+    `**Role:** ${newRole.name}\n` +
+    `**ID:** ${newRole.id}\n` +
+    `**Color:** ${newRole.hexColor}`,
     {
       guildImage: newRole.guild.iconURL({ size: 512 })
     }
   );
 });
 
-// VOICE EVENTS
+// ================= VOICE EVENTS =================
+
 client.on('voiceStateUpdate', (oldState, newState) => {
   const member = newState.member || oldState.member;
   if (!member) return;
@@ -775,7 +842,8 @@ client.on('voiceStateUpdate', (oldState, newState) => {
       member.guild,
       'voiceJoin',
       '🔊 VOICE JOIN',
-      `**Member:** ${member.user.tag}\n**Channel:** ${newState.channel}`,
+      `**Member:** ${member.user.tag}\n` +
+      `**Channel:** ${newState.channel}`,
       { avatar }
     );
   } else if (oldState.channelId && !newState.channelId) {
@@ -783,7 +851,8 @@ client.on('voiceStateUpdate', (oldState, newState) => {
       member.guild,
       'voiceLeave',
       '🔇 VOICE LEAVE',
-      `**Member:** ${member.user.tag}\n**Channel:** ${oldState.channel}`,
+      `**Member:** ${member.user.tag}\n` +
+      `**Channel:** ${oldState.channel}`,
       { avatar }
     );
   } else if (oldState.channelId !== newState.channelId) {
@@ -791,13 +860,16 @@ client.on('voiceStateUpdate', (oldState, newState) => {
       member.guild,
       'voiceMove',
       '🔁 VOICE MOVE',
-      `**Member:** ${member.user.tag}\n**From:** ${oldState.channel}\n**To:** ${newState.channel}`,
+      `**Member:** ${member.user.tag}\n` +
+      `**From:** ${oldState.channel}\n` +
+      `**To:** ${newState.channel}`,
       { avatar }
     );
   }
 });
 
-// STAGE CREATE
+// ================= STAGE EVENTS =================
+
 client.on('stageInstanceCreate', stage => {
   sendLog(
     stage.guild,
@@ -810,7 +882,6 @@ client.on('stageInstanceCreate', stage => {
   );
 });
 
-// STAGE DELETE
 client.on('stageInstanceDelete', stage => {
   sendLog(
     stage.guild,
@@ -823,20 +894,22 @@ client.on('stageInstanceDelete', stage => {
   );
 });
 
-// STAGE UPDATE
 client.on('stageInstanceUpdate', (oldStage, newStage) => {
   sendLog(
     newStage.guild,
     'stageUpdate',
     '🎤 STAGE UPDATED',
-    `**Channel:** <#${newStage.channelId}>\n**Old Topic:** ${oldStage.topic}\n**New Topic:** ${newStage.topic}`,
+    `**Channel:** <#${newStage.channelId}>\n` +
+    `**Old Topic:** ${oldStage.topic}\n` +
+    `**New Topic:** ${newStage.topic}`,
     {
       guildImage: newStage.guild.iconURL({ size: 512 })
     }
   );
 });
 
-// WEBHOOK UPDATE
+// ================= WEBHOOK UPDATE =================
+
 client.on('webhookUpdate', channel => {
   if (!channel.guild) return;
 
@@ -844,14 +917,16 @@ client.on('webhookUpdate', channel => {
     channel.guild,
     'webhookUpdate',
     '🔗 WEBHOOK UPDATED',
-    `**Channel:** ${channel.name}\n**Channel ID:** ${channel.id}`,
+    `**Channel:** ${channel.name}\n` +
+    `**Channel ID:** ${channel.id}`,
     {
       guildImage: channel.guild.iconURL({ size: 512 })
     }
   );
 });
 
-// SERVER UPDATE
+// ================= SERVER UPDATE =================
+
 client.on('guildUpdate', (oldGuild, newGuild) => {
   const changes = [];
 
@@ -885,7 +960,8 @@ client.on('guildUpdate', (oldGuild, newGuild) => {
   );
 });
 
-// RENDER HTTP SERVER
+// ================= RENDER HTTP SERVER =================
+
 const PORT = process.env.PORT || 10000;
 
 const server = http.createServer((req, res) => {
@@ -900,7 +976,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`HTTP server listening on ${PORT}`);
 });
 
-// START BOT
+// ================= START BOT =================
+
 (async () => {
   try {
     await registerCommands();
