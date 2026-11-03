@@ -21,6 +21,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 
+// ENVIRONMENT
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
@@ -30,8 +31,11 @@ if (!TOKEN || !CLIENT_ID) {
   process.exit(1);
 }
 
-const CONFIG_FILE = path.join(process.cwd(), 'pw-venom-config.json');
+// FILES
+const CONFIG_FILE = path.join(__dirname, 'pw-venom-config.json');
+const LOG_BANNER = path.join(__dirname, 'venom.gif');
 
+// EVENTS
 const EVENTS = {
   memberJoin: 'Member Join',
   memberLeave: 'Member Leave',
@@ -60,7 +64,7 @@ const EVENTS = {
   serverUpdate: 'Server Update'
 };
 
-// CUSTOM EMOJI FOR EVERY LOG CATEGORY
+// EMOJIS
 const EVENT_EMOJIS = {
   memberJoin: '🟢',
   memberLeave: '🔴',
@@ -89,6 +93,7 @@ const EVENT_EMOJIS = {
   serverUpdate: '🌐'
 };
 
+// CONFIG
 function loadConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -104,6 +109,7 @@ function saveConfig() {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 
+// CLIENT
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -122,6 +128,7 @@ const client = new Client({
   ]
 });
 
+// SLASH COMMANDS
 const commands = [
   new SlashCommandBuilder()
     .setName('logpanel')
@@ -150,6 +157,7 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(command => command.toJSON());
 
+// REGISTER COMMANDS
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 
@@ -174,10 +182,13 @@ async function sendLog(guild, event, title, description, options = {}) {
   if (!channelId) return false;
 
   const channel = await guild.channels.fetch(channelId).catch(() => null);
-  if (!channel || !channel.isTextBased() || !channel.send) return false;
+
+  if (!channel || !channel.isTextBased() || !channel.send) {
+    return false;
+  }
 
   const embed = new EmbedBuilder()
-    .setColor(options.color || 0x168CFF)
+    .setColor(options.color || 0xB00000)
     .setTitle(title)
     .setDescription(description || 'No details available.')
     .setTimestamp()
@@ -199,24 +210,31 @@ async function sendLog(guild, event, title, description, options = {}) {
   }
 }
 
+// AUDIT LOG
 async function findExecutor(guild, type, targetId) {
   try {
-    const logs = await guild.fetchAuditLogs({ type, limit: 5 });
+    const logs = await guild.fetchAuditLogs({
+      type,
+      limit: 5
+    });
+
     const entry = logs.entries.find(item =>
       item.target?.id === targetId &&
       Date.now() - item.createdTimestamp < 8000
     );
+
     return entry || null;
   } catch {
     return null;
   }
 }
 
+// PANEL KEY
 function panelKey(interaction) {
   return `${interaction.guildId}:${interaction.user.id}`;
 }
 
-// PANEL MENUS WITH EMOJIS
+// PANEL MENUS
 function makePanelRows() {
   const eventMenu = new StringSelectMenuBuilder()
     .setCustomId('pwlog_event')
@@ -249,30 +267,44 @@ function makePanelRows() {
   ];
 }
 
+// PANEL EMBED WITH VINOM GIF
 function panelEmbed() {
   return new EmbedBuilder()
-    .setColor(0x168CFF)
-    .setTitle('💙 PW VENOM LOG')
+    .setColor(0xB00000)
+    .setTitle('💀 VINOM LOG')
     .setDescription(
-      '**SERVER LOG SETTINGS**\n\n' +
-      '🎭 Select a log event from the menu.\n' +
-      '📁 Select the destination channel.\n' +
-      '💾 Press SAVE to store your settings.\n\n' +
-      'Each event has its own emoji and log channel.'
+      '**WELCOME TO VINOM LOG SYSTEM**\n\n' +
+      '🎭 Select your log event.\n' +
+      '📁 Select your destination channel.\n' +
+      '💾 Press SAVE to save your settings.\n\n' +
+      '**Each event has its own log channel.**'
     )
-    .setThumbnail(client.user.displayAvatarURL())
-    .setFooter({ text: 'PW VENOM LOG SYSTEM' });
+    .setImage('attachment://venom.gif')
+    .setFooter({
+      text: 'PW VENOM LOG SYSTEM',
+      iconURL: client.user.displayAvatarURL()
+    });
 }
 
+// READY
 client.once('ready', () => {
   console.log(`PW VENOM LOG online as ${client.user.tag}`);
 });
 
-// COMMANDS AND PANEL
+// INTERACTIONS
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
+
+      // LOG PANEL
       if (interaction.commandName === 'logpanel') {
+        if (!fs.existsSync(LOG_BANNER)) {
+          return interaction.reply({
+            content: '❌ venom.gif is missing. Upload it beside index.js on GitHub.',
+            ephemeral: true
+          });
+        }
+
         panelData.set(panelKey(interaction), {
           event: null,
           channel: null
@@ -280,32 +312,44 @@ client.on('interactionCreate', async interaction => {
 
         return interaction.reply({
           embeds: [panelEmbed()],
+          files: [{
+            attachment: LOG_BANNER,
+            name: 'venom.gif'
+          }],
           components: makePanelRows(),
           ephemeral: true
         });
       }
 
+      // LOG INFO
       if (interaction.commandName === 'loginfo') {
         const guildConfig = config[interaction.guildId] || {};
 
         const lines = Object.entries(EVENTS).map(([key, name]) => {
           const id = guildConfig[key];
-          return `${EVENT_EMOJIS[key]} **${name}:** ${id ? `<#${id}>` : 'Not configured'}`;
+
+          return `${EVENT_EMOJIS[key]} **${name}:** ${
+            id ? `<#${id}>` : 'Not configured'
+          }`;
         });
 
         return interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setColor(0x168CFF)
-              .setTitle('💙 PW VENOM LOG SETTINGS')
+              .setColor(0xB00000)
+              .setTitle('💀 VINOM LOG SETTINGS')
               .setDescription(lines.join('\n'))
-              .setThumbnail(interaction.guild.iconURL() || client.user.displayAvatarURL())
+              .setThumbnail(
+                interaction.guild.iconURL() ||
+                client.user.displayAvatarURL()
+              )
               .setTimestamp()
           ],
           ephemeral: true
         });
       }
 
+      // LOG TEST
       if (interaction.commandName === 'logtest') {
         const event = interaction.options.getString('event');
 
@@ -314,7 +358,9 @@ client.on('interactionCreate', async interaction => {
           event,
           `${EVENT_EMOJIS[event]} LOG TEST`,
           `Test for **${EVENTS[event]}**`,
-          { avatar: interaction.user.displayAvatarURL({ size: 512 }) }
+          {
+            avatar: interaction.user.displayAvatarURL({ size: 512 })
+          }
         );
 
         return interaction.reply({
@@ -414,6 +460,7 @@ client.on('interactionCreate', async interaction => {
 
       config[interaction.guildId] ??= {};
       config[interaction.guildId][data.event] = data.channel;
+
       saveConfig();
 
       const savedEvent = data.event;
@@ -432,6 +479,7 @@ client.on('interactionCreate', async interaction => {
         ephemeral: true
       });
     }
+
   } catch (error) {
     console.error('Interaction error:', error);
 
@@ -451,7 +499,9 @@ client.on('guildMemberAdd', member => {
     'memberJoin',
     '🟢 MEMBER JOIN',
     `**Member:** ${member.user.tag}\n**ID:** ${member.id}\n**Account:** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
-    { avatar: member.user.displayAvatarURL({ size: 512 }) }
+    {
+      avatar: member.user.displayAvatarURL({ size: 512 })
+    }
   );
 });
 
@@ -480,7 +530,9 @@ client.on('guildMemberRemove', async member => {
       'memberLeave',
       '🔴 MEMBER LEAVE',
       `**Member:** ${member.user.tag}\n**ID:** ${member.id}`,
-      { avatar: member.user.displayAvatarURL({ size: 512 }) }
+      {
+        avatar: member.user.displayAvatarURL({ size: 512 })
+      }
     );
   }
 });
@@ -518,7 +570,9 @@ client.on('guildBanRemove', async ban => {
     'unban',
     '🔓 MEMBER UNBANNED',
     `**User:** ${ban.user.tag}\n**Moderator:** ${entry?.executor?.tag || 'Unknown'}`,
-    { avatar: ban.user.displayAvatarURL({ size: 512 }) }
+    {
+      avatar: ban.user.displayAvatarURL({ size: 512 })
+    }
   );
 });
 
@@ -546,7 +600,9 @@ client.on('guildMemberUpdate', (oldMember, newMember) => {
       newMember.guild,
       timeout ? 'timeout' : 'timeoutRemoved',
       timeout ? '⏳ MEMBER TIMEOUT' : '✅ TIMEOUT REMOVED',
-      `**Member:** ${newMember.user.tag}\n**Until:** ${timeout ? `<t:${Math.floor(timeout / 1000)}:F>` : 'Removed'}`,
+      `**Member:** ${newMember.user.tag}\n**Until:** ${
+        timeout ? `<t:${Math.floor(timeout / 1000)}:F>` : 'Removed'
+      }`,
       { avatar }
     );
   }
@@ -561,7 +617,9 @@ client.on('messageDelete', message => {
     'messageDelete',
     '🗑️ MESSAGE DELETED',
     `**Author:** ${message.author?.tag || 'Unknown'}\n**Channel:** ${message.channel}\n**Content:** ${message.content || 'Unavailable'}`,
-    { avatar: message.author?.displayAvatarURL({ size: 512 }) }
+    {
+      avatar: message.author?.displayAvatarURL({ size: 512 })
+    }
   );
 });
 
@@ -576,7 +634,9 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
     'messageEdit',
     '📝 MESSAGE EDITED',
     `**Author:** ${newMessage.author.tag}\n**Channel:** ${newMessage.channel}\n**Before:** ${oldMessage.content || 'Empty'}\n**After:** ${newMessage.content || 'Empty'}\n[Jump to message](${newMessage.url})`,
-    { avatar: newMessage.author.displayAvatarURL({ size: 512 }) }
+    {
+      avatar: newMessage.author.displayAvatarURL({ size: 512 })
+    }
   );
 });
 
@@ -595,7 +655,9 @@ client.on('channelCreate', async channel => {
     'channelCreate',
     '📁 CHANNEL CREATED',
     `**Channel:** ${channel.name}\n**Created by:** ${entry?.executor?.tag || 'Unknown'}`,
-    { guildImage: channel.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: channel.guild.iconURL({ size: 512 })
+    }
   );
 });
 
@@ -614,7 +676,9 @@ client.on('channelDelete', async channel => {
     'channelDelete',
     '🗑️ CHANNEL DELETED',
     `**Channel:** ${channel.name}\n**Deleted by:** ${entry?.executor?.tag || 'Unknown'}`,
-    { guildImage: channel.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: channel.guild.iconURL({ size: 512 })
+    }
   );
 });
 
@@ -627,7 +691,9 @@ client.on('channelUpdate', (oldChannel, newChannel) => {
     'channelUpdate',
     '⚙️ CHANNEL UPDATED',
     `**Channel:** ${newChannel.name}\n**ID:** ${newChannel.id}`,
-    { guildImage: newChannel.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: newChannel.guild.iconURL({ size: 512 })
+    }
   );
 
   const oldPerms = oldChannel.permissionOverwrites?.cache;
@@ -639,7 +705,9 @@ client.on('channelUpdate', (oldChannel, newChannel) => {
       'channelPerms',
       '🔐 CHANNEL PERMISSIONS UPDATED',
       `**Channel:** ${newChannel.name}\n**ID:** ${newChannel.id}`,
-      { guildImage: newChannel.guild.iconURL({ size: 512 }) }
+      {
+        guildImage: newChannel.guild.iconURL({ size: 512 })
+      }
     );
   }
 });
@@ -657,7 +725,9 @@ client.on('roleCreate', async role => {
     'roleCreate',
     '🆕 ROLE CREATED',
     `**Role:** ${role.name}\n**Created by:** ${entry?.executor?.tag || 'Unknown'}`,
-    { guildImage: role.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: role.guild.iconURL({ size: 512 })
+    }
   );
 });
 
@@ -674,7 +744,9 @@ client.on('roleDelete', async role => {
     'roleDelete',
     '🗑️ ROLE DELETED',
     `**Role:** ${role.name}\n**Deleted by:** ${entry?.executor?.tag || 'Unknown'}`,
-    { guildImage: role.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: role.guild.iconURL({ size: 512 })
+    }
   );
 });
 
@@ -685,7 +757,9 @@ client.on('roleUpdate', (oldRole, newRole) => {
     'roleUpdate',
     '⚙️ ROLE UPDATED',
     `**Role:** ${newRole.name}\n**ID:** ${newRole.id}\n**Color:** ${newRole.hexColor}`,
-    { guildImage: newRole.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: newRole.guild.iconURL({ size: 512 })
+    }
   );
 });
 
@@ -723,34 +797,42 @@ client.on('voiceStateUpdate', (oldState, newState) => {
   }
 });
 
-// STAGE EVENTS
+// STAGE CREATE
 client.on('stageInstanceCreate', stage => {
   sendLog(
     stage.guild,
     'stageCreate',
     '🎤 STAGE CREATED',
     `**Channel:** <#${stage.channelId}>\n**Topic:** ${stage.topic}`,
-    { guildImage: stage.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: stage.guild.iconURL({ size: 512 })
+    }
   );
 });
 
+// STAGE DELETE
 client.on('stageInstanceDelete', stage => {
   sendLog(
     stage.guild,
     'stageDelete',
     '🎤 STAGE DELETED',
     `**Channel ID:** ${stage.channelId}\n**Topic:** ${stage.topic}`,
-    { guildImage: stage.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: stage.guild.iconURL({ size: 512 })
+    }
   );
 });
 
+// STAGE UPDATE
 client.on('stageInstanceUpdate', (oldStage, newStage) => {
   sendLog(
     newStage.guild,
     'stageUpdate',
     '🎤 STAGE UPDATED',
     `**Channel:** <#${newStage.channelId}>\n**Old Topic:** ${oldStage.topic}\n**New Topic:** ${newStage.topic}`,
-    { guildImage: newStage.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: newStage.guild.iconURL({ size: 512 })
+    }
   );
 });
 
@@ -763,7 +845,9 @@ client.on('webhookUpdate', channel => {
     'webhookUpdate',
     '🔗 WEBHOOK UPDATED',
     `**Channel:** ${channel.name}\n**Channel ID:** ${channel.id}`,
-    { guildImage: channel.guild.iconURL({ size: 512 }) }
+    {
+      guildImage: channel.guild.iconURL({ size: 512 })
+    }
   );
 });
 
@@ -805,7 +889,10 @@ client.on('guildUpdate', (oldGuild, newGuild) => {
 const PORT = process.env.PORT || 10000;
 
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.writeHead(200, {
+    'Content-Type': 'text/plain'
+  });
+
   res.end('PW VENOM LOG is running');
 });
 
