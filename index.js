@@ -1,3 +1,4 @@
+
 // ==========================================
 // PW VENOM LOG - Discord.js v14
 // ==========================================
@@ -203,6 +204,8 @@ function saveConfig() {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 
+// ================= CLIENT =================
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -245,12 +248,7 @@ const commands = [
         .setName('event')
         .setDescription('Choose an event')
         .setRequired(true)
-        .addChoices(
-          ...Object.entries(EVENTS).map(([value, name]) => ({
-            name: `${EVENT_EMOJIS[value]} ${name}`,
-            value
-          }))
-        )
+        .setAutocomplete(true)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(command => command.toJSON());
@@ -413,10 +411,37 @@ client.once('ready', () => {
 
 client.on('interactionCreate', async interaction => {
   try {
+
+    // LOGTEST AUTOCOMPLETE
+    if (
+      interaction.isAutocomplete() &&
+      interaction.commandName === 'logtest'
+    ) {
+      const focused = interaction.options.getFocused().toLowerCase();
+
+      const choices = Object.entries(EVENTS)
+        .filter(([key, name]) =>
+          key.toLowerCase().includes(focused) ||
+          name.toLowerCase().includes(focused)
+        )
+        .slice(0, 25)
+        .map(([key, name]) => ({
+          name: `${EVENT_EMOJIS[key]} ${name}`.slice(0, 100),
+          value: key
+        }));
+
+      return interaction.respond(choices);
+    }
+
     if (interaction.isChatInputCommand()) {
+
       if (interaction.commandName === 'logpanel') {
         const key = panelKey(interaction);
-        const data = { category: null, event: null, channel: null };
+        const data = {
+          category: null,
+          event: null,
+          channel: null
+        };
 
         panelData.set(key, data);
 
@@ -456,6 +481,13 @@ client.on('interactionCreate', async interaction => {
       if (interaction.commandName === 'logtest') {
         const event = interaction.options.getString('event');
 
+        if (!EVENTS[event]) {
+          return interaction.reply({
+            content: '❌ Unknown event.',
+            ephemeral: true
+          });
+        }
+
         const sent = await sendLog(
           interaction.guild,
           event,
@@ -473,11 +505,16 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
+    if (!interaction.guildId || !interaction.guild) return;
+
     const key = panelKey(interaction);
     const data = panelData.get(key);
 
     // CATEGORY SELECT
-    if (interaction.isStringSelectMenu() && interaction.customId === 'pwlog_category') {
+    if (
+      interaction.isStringSelectMenu() &&
+      interaction.customId === 'pwlog_category'
+    ) {
       if (!data) {
         return interaction.reply({
           content: '❌ Open /logpanel again.',
@@ -496,7 +533,10 @@ client.on('interactionCreate', async interaction => {
     }
 
     // EVENT SELECT
-    if (interaction.isStringSelectMenu() && interaction.customId === 'pwlog_event') {
+    if (
+      interaction.isStringSelectMenu() &&
+      interaction.customId === 'pwlog_event'
+    ) {
       if (!data) {
         return interaction.reply({
           content: '❌ Open /logpanel again.',
@@ -514,7 +554,10 @@ client.on('interactionCreate', async interaction => {
     }
 
     // CHANNEL SELECT
-    if (interaction.isChannelSelectMenu() && interaction.customId === 'pwlog_channel') {
+    if (
+      interaction.isChannelSelectMenu() &&
+      interaction.customId === 'pwlog_channel'
+    ) {
       if (!data?.event) {
         return interaction.reply({
           content: '❌ Select a category and event first.',
@@ -531,7 +574,10 @@ client.on('interactionCreate', async interaction => {
     }
 
     // SAVE
-    if (interaction.isButton() && interaction.customId === 'pwlog_save') {
+    if (
+      interaction.isButton() &&
+      interaction.customId === 'pwlog_save'
+    ) {
       if (!data?.category || !data?.event || !data?.channel) {
         return interaction.reply({
           content: '❌ Select a category, event and channel first.',
@@ -597,6 +643,7 @@ client.on('interactionCreate', async interaction => {
         components: makePanelRows(panelData.get(key))
       });
     }
+
   } catch (error) {
     console.error('Interaction error:', error);
 
@@ -929,7 +976,11 @@ client.on('channelUpdate', (oldChannel, newChannel) => {
 // ================= ROLE EVENTS =================
 
 client.on('roleCreate', async role => {
-  const entry = await findExecutor(role.guild, AuditLogEvent.RoleCreate, role.id);
+  const entry = await findExecutor(
+    role.guild,
+    AuditLogEvent.RoleCreate,
+    role.id
+  );
 
   sendLog(
     role.guild,
@@ -941,7 +992,11 @@ client.on('roleCreate', async role => {
 });
 
 client.on('roleDelete', async role => {
-  const entry = await findExecutor(role.guild, AuditLogEvent.RoleDelete, role.id);
+  const entry = await findExecutor(
+    role.guild,
+    AuditLogEvent.RoleDelete,
+    role.id
+  );
 
   sendLog(
     role.guild,
@@ -989,9 +1044,20 @@ client.on('inviteDelete', invite => {
 
 // ================= EMOJI EVENTS =================
 
-client.on('guildEmojisUpdate', (guild, oldEmojis, newEmojis) => {
-  const added = newEmojis.filter(emoji => !oldEmojis.has(emoji.id));
-  const removed = oldEmojis.filter(emoji => !newEmojis.has(emoji.id));
+client.on('guildEmojisUpdate', (oldEmojis, newEmojis) => {
+  const guild =
+    newEmojis.first()?.guild ||
+    oldEmojis.first()?.guild;
+
+  if (!guild) return;
+
+  const added = newEmojis.filter(
+    emoji => !oldEmojis.has(emoji.id)
+  );
+
+  const removed = oldEmojis.filter(
+    emoji => !newEmojis.has(emoji.id)
+  );
 
   sendLog(
     guild,
