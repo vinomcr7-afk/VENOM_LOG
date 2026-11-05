@@ -522,3 +522,19 @@ function shutdown() {
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+{
+  "name": "pw-venom-log",
+  "version": "2.0.0",
+  "private": true,
+  "description": "PW VENOM LOG - Discord server logging bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.19.3"
+  }
+}
