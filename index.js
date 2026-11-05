@@ -116,10 +116,9 @@ async function registerCommands() {
 }
 
 async function sendLog(guild, event, title, description, options = {}) {
-  const channelId = config[guild.id]?.[event];
-  if (!channelId) return false;
-  const channel = await guild.channels.fetch(channelId).catch(() => null);
-  if (!channel?.isTextBased() || typeof channel.send !== 'function') return false;
+  const configured = config[guild.id]?.[event];
+  const channelIds = Array.isArray(configured) ? configured : (configured ? [configured] : []);
+  if (!channelIds.length) return false;
 
   const embed = new EmbedBuilder()
     .setColor(options.color ?? 0x168CFF)
@@ -131,13 +130,18 @@ async function sendLog(guild, event, title, description, options = {}) {
   if (options.image) embed.setImage(options.image);
   if (options.guildImage) embed.setThumbnail(options.guildImage);
 
-  try {
-    await channel.send({ embeds: [embed] });
-    return true;
-  } catch (error) {
-    console.error(`Could not send ${event} log:`, error.message);
-    return false;
-  }
+  const results = await Promise.all(channelIds.slice(0, 3).map(async channelId => {
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased() || typeof channel.send !== 'function') return false;
+    try {
+      await channel.send({ embeds: [embed] });
+      return true;
+    } catch (error) {
+      console.error(`Could not send ${event} log to ${channelId}:`, error.message);
+      return false;
+    }
+  }));
+  return results.some(Boolean);
 }
 
 async function findExecutor(guild, type, targetId) {
@@ -174,11 +178,11 @@ function makePanelRows(data = {}) {
   }
   if (data.event) {
     const channelMenu = new ChannelSelectMenuBuilder()
-      .setCustomId('pwlog_channel').setPlaceholder('📁 Select a logging channel')
-      .setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(1);
+      .setCustomId('pwlog_channel').setPlaceholder('📁 Select exactly 3 logging channels')
+      .setChannelTypes(ChannelType.GuildText).setMinValues(3).setMaxValues(3);
     rows.push(new ActionRowBuilder().addComponents(channelMenu));
   }
-  if (data.event && data.channel) {
+  if (data.event && data.channels?.length === 3) {
     rows.push(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('pwlog_save').setLabel('SAVE').setEmoji('💾').setStyle(ButtonStyle.Success)
     ));
@@ -188,7 +192,7 @@ function makePanelRows(data = {}) {
 
 function panelEmbed() {
   const embed = new EmbedBuilder().setColor(0x168CFF).setTitle('💙 PW VENOM LOG')
-    .setDescription('**SERVER LOG SETTINGS**\n\n📂 Select a category.\n📋 Select an event.\n📁 Select the destination channel.\n💾 Press SAVE, then confirm with YES or cancel with NO.\n\nEach event can have its own log channel.')
+    .setDescription('**SERVER LOG SETTINGS**\n\n📂 Select a category.\n📋 Select an event.\n📁 Select exactly 3 destination channels.\n💾 Press SAVE, then confirm with YES or cancel with NO.\n\nEach event sends its logs to the 3 selected channels.')
     .setFooter({ text: 'PW VENOM LOG SYSTEM' });
   if (PANEL_IMAGE_URL) embed.setImage(PANEL_IMAGE_URL);
   return embed;
@@ -218,16 +222,17 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!interaction.guild) return interaction.reply({ content: 'Use this command inside a server.', ephemeral: true });
 
       if (interaction.commandName === 'logpanel') {
-        const data = { category: null, event: null, channel: null };
+        const data = { category: null, event: null, channels: [] };
         panelData.set(panelKey(interaction), data);
         return interaction.reply({ embeds: [panelEmbed()], components: makePanelRows(data), ephemeral: true });
       }
 
       if (interaction.commandName === 'loginfo') {
         const settings = config[interaction.guildId] || {};
-        const lines = Object.entries(EVENTS).map(([key, label]) =>
-          `${EVENT_EMOJIS[key]} **${label}:** ${settings[key] ? `<#${settings[key]}>` : 'Not configured'}`
-        );
+        const lines = Object.entries(EVENTS).map(([key, label]) => {
+          const ids = Array.isArray(settings[key]) ? settings[key] : (settings[key] ? [settings[key]] : []);
+          return `${EVENT_EMOJIS[key]} **${label}:** ${ids.length ? ids.map(id => `<#${id}>`).join(' • ') : 'Not configured'}`;
+        });
         const embed = new EmbedBuilder().setColor(0x168CFF).setTitle('💙 PW VENOM LOG SETTINGS')
           .setDescription(lines.join('\n')).setTimestamp();
         const icon = interaction.guild.iconURL();
@@ -249,39 +254,44 @@ client.on(Events.InteractionCreate, async interaction => {
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'pwlog_category') {
       if (!data) return interaction.reply({ content: 'Panel expired. Run /logpanel again.', ephemeral: true });
-      data.category = interaction.values[0]; data.event = null; data.channel = null;
+      data.category = interaction.values[0]; data.event = null; data.channels = [];
       pendingConfirmations.delete(key);
       return interaction.update({ embeds: [panelEmbed()], components: makePanelRows(data), content: null });
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'pwlog_event') {
       if (!data) return interaction.reply({ content: 'Panel expired. Run /logpanel again.', ephemeral: true });
-      data.event = interaction.values[0]; data.channel = null;
+      data.event = interaction.values[0]; data.channels = [];
       pendingConfirmations.delete(key);
       return interaction.update({ embeds: [panelEmbed()], components: makePanelRows(data), content: null });
     }
 
     if (interaction.isChannelSelectMenu() && interaction.customId === 'pwlog_channel') {
       if (!data?.event) return interaction.reply({ content: 'Select a category and event first.', ephemeral: true });
-      data.channel = interaction.values[0];
+      if (interaction.values.length !== 3) {
+        return interaction.reply({ content: 'Select exactly 3 logging channels.', ephemeral: true });
+      }
+      data.channels = interaction.values.slice(0, 3);
       pendingConfirmations.delete(key);
       return interaction.update({ embeds: [panelEmbed()], components: makePanelRows(data), content: null });
     }
 
     if (interaction.isButton() && interaction.customId === 'pwlog_save') {
-      if (!data?.category || !data?.event || !data?.channel) {
-        return interaction.reply({ content: 'Select a category, event and channel first.', ephemeral: true });
+      if (!data?.category || !data?.event || data.channels?.length !== 3) {
+        return interaction.reply({ content: 'Select a category, event and exactly 3 channels first.', ephemeral: true });
       }
-      const channel = await interaction.guild.channels.fetch(data.channel).catch(() => null);
-      if (!channel?.isTextBased()) return interaction.reply({ content: 'Selected channel is unavailable.', ephemeral: true });
       const botMember = interaction.guild.members.me;
-      const perms = channel.permissionsFor(botMember);
-      if (!perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) {
-        return interaction.reply({ content: 'Give the bot View Channel, Send Messages and Embed Links in that channel.', ephemeral: true });
+      for (const channelId of data.channels) {
+        const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+        if (!channel?.isTextBased()) return interaction.reply({ content: `Channel <#${channelId}> is unavailable.`, ephemeral: true });
+        const perms = channel.permissionsFor(botMember);
+        if (!perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) {
+          return interaction.reply({ content: `Give the bot View Channel, Send Messages and Embed Links in <#${channelId}>.`, ephemeral: true });
+        }
       }
-      pendingConfirmations.set(key, { event: data.event, channelId: data.channel, category: data.category, expires: Date.now() + 60000 });
+      pendingConfirmations.set(key, { event: data.event, channelIds: data.channels.slice(0, 3), category: data.category, expires: Date.now() + 60000 });
       return interaction.update({
-        content: `⚠️ **Confirm saving these settings**\nEvent: **${EVENTS[data.event]}**\nChannel: <#${data.channel}>`,
+        content: `⚠️ **Confirm saving these settings**\nEvent: **${EVENTS[data.event]}**\nChannels:\n${data.channels.map(id => `• <#${id}>`).join('\n')}`,
         components: confirmationRows()
       });
     }
@@ -297,7 +307,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return interaction.update({ content: '⌛ Confirmation expired. Select the event and channel again.', components: makePanelRows(data || {}) });
       }
       config[interaction.guildId] ??= {};
-      config[interaction.guildId][pending.event] = pending.channelId;
+      config[interaction.guildId][pending.event] = pending.channelIds.slice(0, 3);
       try {
         saveConfig();
       } catch (error) {
@@ -305,9 +315,9 @@ client.on(Events.InteractionCreate, async interaction => {
         return interaction.update({ content: '❌ Could not save settings. Check host disk permissions.', components: makePanelRows(data || {}) });
       }
       pendingConfirmations.delete(key);
-      if (data) { data.event = null; data.channel = null; }
+      if (data) { data.event = null; data.channels = []; }
       return interaction.update({
-        content: `💾 **SAVED SUCCESSFULLY**\n${EVENT_EMOJIS[pending.event]} Event: **${EVENTS[pending.event]}**\n📁 Channel: <#${pending.channelId}>`,
+        content: `💾 **SAVED SUCCESSFULLY**\n${EVENT_EMOJIS[pending.event]} Event: **${EVENTS[pending.event]}**\n📁 Channels:\n${pending.channelIds.map(id => `• <#${id}>`).join('\n')}`,
         embeds: [panelEmbed()], components: makePanelRows(data || {})
       });
     }
