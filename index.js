@@ -38,10 +38,6 @@ if (!TOKEN || !CLIENT_ID) {
   process.exit(1);
 }
 
-if (!fs.existsSync(IMAGE_FILE)) {
-  console.error('92.gif image file is missing!');
-}
-
 const CATEGORIES = {
   members: {
     name: 'Members',
@@ -359,10 +355,9 @@ async function sendLog(guild, event, title, description) {
 }
 
 function panelEmbed() {
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(0x168CFF)
     .setTitle('💙 PW VENOM LOG')
-    .setImage('attachment://92.gif')
     .setDescription(
       '**SERVER LOG SETTINGS**\n' +
       '📂 Select a category.\n' +
@@ -374,6 +369,12 @@ function panelEmbed() {
     .setFooter({
       text: 'PW VENOM LOG SYSTEM'
     });
+
+  if (fs.existsSync(IMAGE_FILE)) {
+    embed.setImage('attachment://92.gif');
+  }
+
+  return embed;
 }
 
 function makePanelRows(data = {}) {
@@ -492,6 +493,10 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (interaction.commandName === 'logpanel') {
+        await interaction.deferReply({
+          ephemeral: false
+        });
+
         const data = {
           category: null,
           event: null,
@@ -500,13 +505,18 @@ client.on(Events.InteractionCreate, async interaction => {
 
         panelData.set(panelKey(interaction), data);
 
-        return interaction.reply({
+        const files = fs.existsSync(IMAGE_FILE)
+          ? [
+              new AttachmentBuilder(IMAGE_FILE, {
+                name: '92.gif'
+              })
+            ]
+          : [];
+
+        return interaction.editReply({
           embeds: [panelEmbed()],
           components: makePanelRows(data),
-          files: [
-            new AttachmentBuilder(IMAGE_FILE)
-          ],
-          ephemeral: false
+          files
         });
       }
 
@@ -654,6 +664,8 @@ client.on(Events.InteractionCreate, async interaction => {
         });
       }
 
+      await interaction.deferUpdate();
+
       const channelId = data.channels[0];
 
       const channel = await interaction.guild.channels
@@ -661,7 +673,7 @@ client.on(Events.InteractionCreate, async interaction => {
         .catch(() => null);
 
       if (!channel || !channel.isTextBased()) {
-        return interaction.reply({
+        return interaction.followUp({
           content: 'The selected channel is unavailable.',
           ephemeral: true
         });
@@ -679,7 +691,7 @@ client.on(Events.InteractionCreate, async interaction => {
         PermissionFlagsBits.SendMessages,
         PermissionFlagsBits.EmbedLinks
       ])) {
-        return interaction.reply({
+        return interaction.followUp({
           content: '❌ Bot needs View Channel, Send Messages and Embed Links permissions.',
           ephemeral: true
         });
@@ -691,7 +703,7 @@ client.on(Events.InteractionCreate, async interaction => {
         expires: Date.now() + 60000
       });
 
-      return interaction.update({
+      return interaction.editReply({
         content:
           `⚠️ **Confirm settings**\n` +
           `Event: **${EVENTS[data.event]}**\n` +
