@@ -24,11 +24,15 @@ const {
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
+const { Pool } = require('pg');
+const crypto = require('node:crypto');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
 const PORT = Number(process.env.PORT) || 10000;
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : undefined });
 
 const CONFIG_FILE = path.join(__dirname, 'pw-venom-config.json');
 const IMAGE_FILE = path.join(__dirname, '92.gif');
@@ -243,15 +247,32 @@ const pendingConfirmations = new Map();
 
 function saveConfig() {
   const tempFile = `${CONFIG_FILE}.tmp`;
-
-  fs.writeFileSync(
-    tempFile,
-    JSON.stringify(config, null, 2),
-    'utf8'
-  );
-
+  fs.writeFileSync(tempFile, JSON.stringify(config, null, 2), 'utf8');
   fs.renameSync(tempFile, CONFIG_FILE);
+  pool.query(
+    `INSERT INTO guild_configs (guild_id, config, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (guild_id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()`,
+    [String(saveConfig.guildId || ''), JSON.stringify(saveConfig.guildConfig || {})]
+  ).catch(error => console.error('PostgreSQL config save failed:', error.message));
 }
+
+async function persistGuildConfig(guildId, guildConfig) {
+  config[guildId] = guildConfig;
+  const tempFile = `${CONFIG_FILE}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(config, null, 2), 'utf8');
+  fs.renameSync(tempFile, CONFIG_FILE);
+  await pool.query(
+    `INSERT INTO guild_configs (guild_id, config, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (guild_id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()`,
+    [String(guildId), JSON.stringify(guildConfig)]
+  );
+}
+
+async function initializeDatabase() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS guild_configs (guild_id TEXT PRIMARY KEY, config JSONB NOT NULL DEFAULT '{}'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  const result = await pool.query('SELECT guild_id, config FROM guild_configs');
+  for (const row of result.rows) config[row.guild_id] = row.config || {};
+  console.log(`Loaded ${result.rowCount} guild configurations from PostgreSQL.`);
+}
+
 
 function panelKey(interaction) {
   return `${interaction.guildId}:${interaction.user.id}`;
@@ -740,10 +761,8 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       config[interaction.guildId] ??= {};
-      config[interaction.guildId][pending.event] =
-        pending.channelId;
-
-      saveConfig();
+      config[interaction.guildId][pending.event] = pending.channelId;
+      await persistGuildConfig(interaction.guildId, config[interaction.guildId]);
       pendingConfirmations.delete(key);
 
       if (data) data.channels = [];
@@ -1160,24 +1179,80 @@ client.on(Events.WebhooksUpdate, channel => {
   );
 });
 
-// RENDER HTTP SERVER
-
-const server = http.createServer((req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/plain; charset=utf-8'
+// RENDER HTTP SERVER + PRIVATE WEBSITE API
+function sendJson(res, status, data) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(data));
+}
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 100000) reject(new Error('Request too large')); });
+    req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch (e) { reject(e); } });
+    req.on('error', reject);
   });
-
-  res.end('PW VENOM LOG is running!');
+}
+function authorized(req) {
+  const supplied = req.headers['x-venom-secret'] || '';
+  if (!INTERNAL_API_SECRET || supplied.length !== INTERNAL_API_SECRET.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(INTERNAL_API_SECRET));
+}
+const server = http.createServer(async (req, res) => {
+  if (req.url === '/health' && req.method === 'GET') return sendJson(res, 200, { online: true, botReady: client.isReady() });
+  if (!req.url.startsWith('/internal/')) {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('PW VENOM LOG is running!');
+  }
+  if (!authorized(req)) return sendJson(res, 401, { error: 'Unauthorized' });
+  try {
+    if (req.method === 'GET' && req.url === '/internal/guilds') {
+      return sendJson(res, 200, { guilds: client.guilds.cache.map(g => ({ id: g.id, name: g.name })) });
+    }
+    const match = req.url.match(/^\/internal\/guilds\/(\d+)\/(channels|config)$/);
+    if (!match) return sendJson(res, 404, { error: 'Not found' });
+    const [, guildId, action] = match;
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) return sendJson(res, 404, { error: 'Bot is not in this server.' });
+    if (req.method === 'GET' && action === 'channels') {
+      const channels = await guild.channels.fetch();
+      return sendJson(res, 200, { channels: channels.filter(c => c && c.type === ChannelType.GuildText).map(c => ({ id: c.id, name: c.name })).sort((a,b) => a.name.localeCompare(b.name)) });
+    }
+    if (req.method === 'GET' && action === 'config') {
+      return sendJson(res, 200, { config: config[guildId] || {} });
+    }
+    if (req.method === 'PUT' && action === 'config') {
+      const body = await readJson(req);
+      if (!body.config || typeof body.config !== 'object' || Array.isArray(body.config)) return sendJson(res, 400, { error: 'Invalid config.' });
+      const allowedEvents = new Set(Object.keys(EVENTS));
+      const clean = {};
+      for (const [event, channelId] of Object.entries(body.config)) {
+        if (!allowedEvents.has(event)) return sendJson(res, 400, { error: 'Unknown log event.' });
+        if (typeof channelId !== 'string' || !/^\d{17,20}$/.test(channelId)) return sendJson(res, 400, { error: 'Invalid channel ID.' });
+        const channel = await guild.channels.fetch(channelId).catch(() => null);
+        if (!channel || channel.type !== ChannelType.GuildText || channel.guildId !== guildId) return sendJson(res, 400, { error: `Invalid channel for ${event}.` });
+        const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        const perms = me && channel.permissionsFor(me);
+        if (!perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) return sendJson(res, 400, { error: `Bot lacks permissions in #${channel.name}.` });
+        clean[event] = channelId;
+      }
+      await persistGuildConfig(guildId, clean);
+      return sendJson(res, 200, { saved: true, config: clean });
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  } catch (error) {
+    console.error('Private API error:', error);
+    return sendJson(res, 500, { error: 'Internal bot API error.' });
+  }
 });
-
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`HTTP server listening on ${PORT}`);
-});
+server.listen(PORT, '0.0.0.0', () => console.log(`HTTP server listening on ${PORT}`));
 
 // START BOT
 
 async function startBot() {
   try {
+    if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
+    if (!INTERNAL_API_SECRET) throw new Error('INTERNAL_API_SECRET is required');
+    await initializeDatabase();
     await registerCommands();
     await client.login(TOKEN);
   } catch (error) {
